@@ -267,7 +267,7 @@ PlayerSettings:
   useCustomGradlePropertiesTemplate: 0
   useCustomGradleSettingsTemplate: 0
   useCustomProguardFile: 0
-  AndroidTargetArchitectures: 1
+  AndroidTargetArchitectures: 3
   AndroidTargetDevices: 0
   AndroidSplashScreenScale: 0
   androidSplashScreen: {fileID: 0}
@@ -745,7 +745,9 @@ PlayerSettings:
   platformArchitecture:
     iOS: 2
   scriptingBackend:
+    Android: 1
     Metro: 2
+    Standalone: 1
     WP8: 2
     WebGL: 1
     iOS: 0
