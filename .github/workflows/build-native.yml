@@ -3,7 +3,8 @@ name: build-native
 # Builds the native libraries used by the Unity plugin
 # (Unity/Assets/SimpleDiskUtils/Plugins/DiskUtils) without modifying any of
 # the original project files. The final archive is organized as:
-#   Android/  DiskUtils.jar (+ dexed variant) compiled against android.jar
+#   Android/  DiskUtils.jar compiled against android.jar (Unity's Gradle
+#             build performs the dex conversion itself)
 #   iOS/      DiskUtils.mm source only (Unity compiles it directly into the
 #             generated Xcode project, no prebuilt library is needed)
 #   macOS/    diskutils.bundle (universal: Intel + Apple Silicon)
@@ -117,7 +118,7 @@ jobs:
       - name: Install Android platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-29" "build-tools;34.0.0" > /dev/null
+            "platforms;android-29" > /dev/null
 
       - name: Compile Java sources
         run: |
@@ -127,21 +128,13 @@ jobs:
             -d build/classes \
             Android/simple-disk-utils/app/src/main/java/com/dikra/diskutils/DiskUtils.java
 
-      # Java-bytecode jar (usable by tools that dex on their own).
+      # Java-bytecode jar; Unity's Gradle build converts it to Dalvik
+      # bytecode during packaging, matching the format of the original
+      # Asset Store plugin jar.
       - name: Package jar
         run: |
           mkdir -p artifacts/Android
           jar cf artifacts/Android/DiskUtils.jar -C build/classes .
-
-      # Dalvik-executable jar (drop-in for Unity / Android apps).
-      - name: Dex and package dexed jar
-        run: |
-          mkdir -p build/dex
-          "$ANDROID_HOME/build-tools/34.0.0/d8" --release \
-            --lib "$ANDROID_HOME/platforms/android-29/android.jar" \
-            --output build/dex \
-            build/classes/com/dikra/diskutils/DiskUtils.class
-          jar cf artifacts/Android/DiskUtils_dexed.jar -C build/dex classes.dex
           ls -la artifacts/Android
 
       - name: Upload Android artifacts
