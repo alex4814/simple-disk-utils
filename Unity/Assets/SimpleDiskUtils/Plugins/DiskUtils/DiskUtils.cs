@@ -85,13 +85,13 @@ namespace SimpleDiskUtils
 
 
 #elif UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        [DllImport("DiskUtilsWinAPI")]
+        [DllImport("DiskUtils")]
         private static extern int getAvailableDiskSpace(StringBuilder drive);
 
-        [DllImport("DiskUtilsWinAPI")]
+        [DllImport("DiskUtils")]
         private static extern int getTotalDiskSpace(StringBuilder drive);
 
-        [DllImport("DiskUtilsWinAPI")]
+        [DllImport("DiskUtils")]
         private static extern int getBusyDiskSpace(StringBuilder drive);
 
         private const string DEFAULT_DRIVE = "C:/";

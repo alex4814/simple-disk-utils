@@ -8,7 +8,7 @@ name: build-native
 #   iOS/      DiskUtils.mm source only (Unity compiles it directly into the
 #             generated Xcode project, no prebuilt library is needed)
 #   macOS/    diskutils.bundle (universal: Intel + Apple Silicon)
-#   Windows/  DiskUtilsWinAPI.dll under x86/ and x86_64/
+#   Windows/  DiskUtils.dll under x86/ and x86_64/
 on:
   push:
     branches: [ main, master ]
@@ -39,8 +39,9 @@ jobs:
       - name: Build x64 Release
         run: msbuild Windows/DiskUtilsWinAPI/DiskUtilsWinAPI.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /nologo /v:m
 
-      # Collect the produced DLLs and rename them to match the Unity plugin
-      # layout (Windows/x86 and Windows/x86_64).
+      # Collect the produced DLLs and copy them as DiskUtils.dll to match the
+      # Unity plugin layout and the DllImport name in DiskUtils.cs
+      # (Windows/x86 and Windows/x86_64).
       - name: Collect artifacts
         shell: pwsh
         run: |
@@ -49,9 +50,9 @@ jobs:
             Where-Object { $_.FullName -notmatch 'artifacts' } |
             ForEach-Object {
               if ($_.FullName -match '(?i)\\x64\\') {
-                Copy-Item $_.FullName artifacts/Windows/x86_64/ -Force
+                Copy-Item $_.FullName artifacts/Windows/x86_64/DiskUtils.dll -Force
               } else {
-                Copy-Item $_.FullName artifacts/Windows/x86/ -Force
+                Copy-Item $_.FullName artifacts/Windows/x86/DiskUtils.dll -Force
               }
             }
           Get-ChildItem -Recurse artifacts/Windows
