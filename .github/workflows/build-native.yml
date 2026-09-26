@@ -1,0 +1,192 @@
+name: build-native
+
+# Builds the native libraries used by the Unity plugin
+# (Unity/Assets/SimpleDiskUtils/Plugins/DiskUtils) without modifying any of
+# the original project files. The final archive is organized as:
+#   Android/  DiskUtils.jar (+ dexed variant) compiled against android.jar
+#   iOS/      DiskUtils.mm source only (Unity compiles it directly into the
+#             generated Xcode project, no prebuilt library is needed)
+#   macOS/    diskutils.bundle (universal: Intel + Apple Silicon)
+#   Windows/  DiskUtilsWinAPI.dll under x86/ and x86_64/
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows DLL (x86 + x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Adds MSBuild to PATH. The v140 toolset/8.1 SDK referenced by the
+      # original project file are not available on hosted runners, so the
+      # toolset and Windows SDK are overridden on the command line below
+      # (the .vcxproj file itself is left untouched).
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      # The solution maps x86 -> Win32; building the .sln (instead of the raw
+      # .vcxproj) keeps the original OutDir layout intact.
+      - name: Build Win32 Release
+        run: msbuild Windows/DiskUtilsWinAPI/DiskUtilsWinAPI.sln /p:Configuration=Release /p:Platform=x86 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /nologo /v:m
+
+      - name: Build x64 Release
+        run: msbuild Windows/DiskUtilsWinAPI/DiskUtilsWinAPI.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /nologo /v:m
+
+      # Collect the produced DLLs and rename them to match the Unity plugin
+      # layout (Windows/x86 and Windows/x86_64).
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/Windows/x86, artifacts/Windows/x86_64 | Out-Null
+          Get-ChildItem -Recurse -Filter "DiskUtilsWinAPI.dll" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch 'artifacts' } |
+            ForEach-Object {
+              if ($_.FullName -match '(?i)\\x64\\') {
+                Copy-Item $_.FullName artifacts/Windows/x86_64/ -Force
+              } else {
+                Copy-Item $_.FullName artifacts/Windows/x86/ -Force
+              }
+            }
+          Get-ChildItem -Recurse artifacts/Windows
+
+      # Upload the whole artifacts dir so the Android/iOS/macOS/Windows
+      # folder names are preserved after artifact merge.
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native
+          path: artifacts
+
+  macos:
+    name: macOS bundle
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- macOS -----------------------------------------------------------
+      # Compile the plain C++ sources directly (skips the old Xcode project,
+      # no repo file is modified) and assemble a .bundle with the same layout
+      # as the Unity native plugin: diskutils.bundle/Contents/MacOS/diskutils
+      # plus a Contents/Info.plist. A universal (x86_64 + arm64) binary is
+      # produced, so this single bundle supports both Intel and Apple Silicon.
+      - name: Build macOS universal bundle
+        run: |
+          mkdir -p artifacts/macOS/diskutils.bundle/Contents/MacOS
+          clang++ -std=c++14 -O2 -bundle \
+            -arch x86_64 -arch arm64 \
+            Mac/diskutils/diskutils.cpp \
+            -o artifacts/macOS/diskutils.bundle/Contents/MacOS/diskutils
+          # Copy the Xcode Info.plist template and fill in its $(...) placeholders.
+          PLIST=artifacts/macOS/diskutils.bundle/Contents/Info.plist
+          cp Mac/diskutils/diskutils/Info.plist "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable diskutils" \
+            -c "Set :CFBundleIdentifier com.dikra.diskutils" \
+            -c "Set :CFBundleName diskutils" "$PLIST"
+          file artifacts/macOS/diskutils.bundle/Contents/MacOS/diskutils
+          find artifacts/macOS -type f
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-native
+          path: artifacts
+
+  android:
+    name: Android jar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The repo's Gradle setup (AGP 3.5 + jcenter) no longer works on CI,
+      # so the single Java source is compiled directly against the Android
+      # platform jar instead. No original file is modified.
+      - name: Install Android platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-29" "build-tools;34.0.0" > /dev/null
+
+      - name: Compile Java sources
+        run: |
+          mkdir -p build/classes
+          javac -source 8 -target 8 \
+            -bootclasspath "$ANDROID_HOME/platforms/android-29/android.jar" \
+            -d build/classes \
+            Android/simple-disk-utils/app/src/main/java/com/dikra/diskutils/DiskUtils.java
+
+      # Java-bytecode jar (usable by tools that dex on their own).
+      - name: Package jar
+        run: |
+          mkdir -p artifacts/Android
+          jar cf artifacts/Android/DiskUtils.jar -C build/classes .
+
+      # Dalvik-executable jar (drop-in for Unity / Android apps).
+      - name: Dex and package dexed jar
+        run: |
+          mkdir -p build/dex
+          "$ANDROID_HOME/build-tools/34.0.0/d8" --release \
+            --lib "$ANDROID_HOME/platforms/android-29/android.jar" \
+            --output build/dex \
+            build/classes/com/dikra/diskutils/DiskUtils.class
+          jar cf artifacts/Android/DiskUtils_dexed.jar -C build/dex classes.dex
+          ls -la artifacts/Android
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-native
+          path: artifacts
+
+  collect:
+    name: Collect all artifacts
+    needs: [ windows, macos, android ]
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to create a GitHub release when a v* tag is pushed.
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-native'
+          merge-multiple: true
+          path: dist
+
+      # iOS needs no prebuilt library: Unity compiles the ObjC++ source
+      # directly into the generated Xcode project, so just ship the source.
+      - name: Add iOS source
+        run: |
+          mkdir -p dist/iOS
+          cp iOS/DiskUtils.mm dist/iOS/DiskUtils.mm
+
+      - name: List final output
+        run: find dist -type f | sort
+
+      # Publish a GitHub release with all binaries when a v* tag is pushed.
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Keep the Android/iOS/macOS/Windows folder structure in the zip.
+          zip -r simple-disk-utils-${{ github.ref_name }}.zip dist
+          gh release create "${{ github.ref_name }}" \
+            --title "simple-disk-utils ${{ github.ref_name }}" \
+            --notes "Native binaries built by GitHub Actions." \
+            simple-disk-utils-${{ github.ref_name }}.zip
